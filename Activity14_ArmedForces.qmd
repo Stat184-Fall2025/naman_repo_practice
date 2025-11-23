@@ -3,7 +3,7 @@ title: "Activity 14"
 subtitle: "US Armed Forces Data Exploration"
 author: "Naman Khandelwal"
 date: "2025-11-18"
-format: html
+format: pdf
 ---
 
 # Exploring the Armed Forces
