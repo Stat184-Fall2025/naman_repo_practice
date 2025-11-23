@@ -1,0 +1,33 @@
+---
+title: "Activity 14"
+subtitle: "US Armed Forces Data Exploration"
+author: "Naman Khandelwal"
+date: "2025-11-18"
+format: html
+---
+
+# Exploring the Armed Forces
+
+We will use the wrangled data to explore whether sex and rank are independent of one another through a two-way frequency table.
+
+## Two-way Frequency Table
+
+This analysis examines the relationship between sex and rank among enlisted soldiers in the U.S. Army.
+
+### Narrative Interpretation
+
+The two-way frequency table comparing sex and rank among Enlisted soldiers in the U.S. Army shows how representation varies across pay grades. Each row corresponds to a specific enlisted rank such as Private, Corporal, or Staff Sergeant, and the columns report the number of male and female soldiers in each role, along with row and column totals.
+
+Across the table, the overall pattern reveals that male and female counts increase and decrease together across ranks rather than diverging sharply. Ranks with larger numbers of males, such as the junior enlisted levels, also tend to have larger numbers of females relative to other ranks, while senior enlisted positions show smaller and fairly similar counts for both sexes.
+
+# Popularity of Baby Names
+
+To explore baby name popularity in a meaningful way, we chose the first names of our instructional team (Veronica, Alyssa, Abby, and Neil) so the analysis stays directly connected to our course context.
+
+# The Box Problem
+
+Exploring the volume of an open-top box as a function of the cut-out size for a 36 in by 48 in sheet of paper.
+
+# Self Reflection
+
+I have learned a lot in this course, starting with simple concepts like functions with the box problem, then moving into harder concepts like data cleaning and wrangling with tidyverse. Creating data visualizations with ggplot2 was rewarding, and debugging helped me grow significantly as a programmer.
