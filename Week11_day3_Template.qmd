@@ -1,0 +1,598 @@
+---
+title: "Activity #14"
+subtitle: "US Armed Forces Data Exploration"
+author: "Naman Khandelwal"
+date: "November 18, 2025"
+
+format:
+  pdf:
+    number-sections: true
+    fig-align: center
+    cap-location: top
+    geometry:
+      - top=1in
+      - left=1in
+      - right=1in
+      - bottom=1in
+    colorlinks: true
+
+execute:
+  echo: false
+  warning: false
+
+editor: visual
+---
+
+
+```{r}
+#| label: docSetup
+#| include: false
+
+# install.packages("tinytex")
+# below is the command for Pyhton if anyone wants to use instead of R. Run the command in terminal.
+# python -m pip install jupyter pandas numpy matplotlib
+
+# Load Packages ----
+library(googlesheets4) # For loading Armed Forces Data
+library(rvest) # For scraping Armed Forces Ranks
+#library(dcData) # For loading Baby Names Data
+library(babynames)  # For loading Baby Names Data
+library(tidyverse) # For data wrangling and visualizing
+library(janitor) # For making two-way table
+library(knitr) # For creating professional tables
+library(kableExtra) # For styling professional tables
+
+```
+
+# Exploring the Armed Forces
+
+We will use the wrangled data to explore whether sex and rank are independent of one another through a two-way frequency table.
+
+
+```{r}
+#| label: fig-armed-forces-freq
+#| fig-cap: "Figure 2. Two-way frequency table of Army enlisted personnel by sex and rank."
+#| fig-alt: "A contingency table showing counts of Army enlisted service members by rank (rows) and sex (columns), including row and column totals."
+# Armed Forces June 2025 – Tidy Group + Individual Data
+# Goal: build
+#   1) a grouped data set (counts by pay grade / branch / sex)
+#   2) an individual-level data set (one row per service member)
+# with rank info joined on from a separate table.
+## A. Load packages ----
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(rvest)
+  library(googlesheets4)
+})
+
+## B. Pull in the Google Sheet data (Armed Forces counts) ----
+
+# Use "public / no login" mode for reading the sheet
+gs4_deauth()
+
+sheet_url <- "https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?usp=sharing"
+
+# Grab the header rows (title + actual headers)
+forces_hdr_raw <- read_sheet(
+  ss        = sheet_url,
+  col_names = FALSE,
+  n_max     = 3            # only first 3 rows
+)
+
+# Grab the core data block under the headers
+forces_raw <- read_sheet(
+  ss        = sheet_url,
+  col_names = FALSE,
+  skip      = 3,           # drop first 3 rows
+  n_max     = 28,          # ignore footer rows
+  na        = "N/A*"       # treat N/A* as missing
+)
+
+## C. Construct useful column names + clean the forces table ----
+
+# Branches repeat in groups of 3 (Total, Male, Female) per branch
+branches_vec <- rep(
+  x    = c("Army", "Navy", "Marine Corps", "Air Force", "Space Force", "Total"),
+  each = 3
+)
+
+# Combine branch label and the third header row (Total / Male / Female)
+forces_colnames <- paste(
+  c("", branches_vec),      # first column is the pay grade
+  forces_hdr_raw[3, ],      # "Pay Grade", "Total", "Male", ...
+  sep = "."
+)
+
+names(forces_raw) <- forces_colnames
+
+forces_tidy_base <- forces_raw %>%
+  dplyr::rename(PayGrade = `.Pay Grade`) %>%  # make the pay grade name friendlier
+  dplyr::select(!dplyr::contains("Total")) %>%  # we’ll drop all branch totals
+  # Filter out total *rows* (we only want specific grades)
+  dplyr::filter(
+    PayGrade != "Total Enlisted",
+    PayGrade != "Total Warrant Officers",
+    PayGrade != "Total Officers",
+    PayGrade != "Total"
+  ) %>%
+  tidyr::pivot_longer(
+    cols      = !PayGrade,
+    names_to  = "BranchSex",
+    values_to = "Count"
+  ) %>%
+  tidyr::separate_wider_delim(
+    cols  = BranchSex,
+    delim = ".",
+    names = c("Branch", "Sex")
+  )
+
+## D. Pull and reshape the rank lookup table ----
+
+rank_page <- read_html("https://neilhatfield.github.io/Stat184_PayGradeRanks.html")
+
+rank_tables <- rank_page %>%
+  html_elements("table") %>%
+  html_table()
+
+ranks_raw <- rank_tables[[1]]
+
+# Put something in the empty first cell and promote first row to header
+ranks_raw[1, 1] <- "MetaType"
+
+rank_header <- ranks_raw[1, ]
+names(ranks_raw) <- rank_header[1, ]
+
+# Drop the header row and the trailing summary row
+ranks_core <- ranks_raw[-c(1, 26), ]
+
+ranks_tidy <- ranks_core %>%
+  dplyr::select(!MetaType) %>%  # first column is just a label
+  tidyr::pivot_longer(
+    cols      = !`Pay Grade`,
+    names_to  = "Branch",
+    values_to = "Rank"
+  ) %>%
+  dplyr::mutate(
+    Rank = na_if(Rank, "--")    # treat "--" as missing rank
+  )
+
+## E. Join the forces data with rank titles ----
+
+forces_with_rank <- dplyr::left_join(
+  x = forces_tidy_base,
+  y = ranks_tidy,
+  by = dplyr::join_by(PayGrade == `Pay Grade`, Branch == Branch)
+)
+
+## F. Build group-level and individual-level data sets ----
+
+# Group-level: one row per pay grade / branch / sex with rank and count
+forces_groups <- forces_with_rank
+
+# Individual-level: turn counts into repeated rows (one per service member)
+forces_individuals <- forces_with_rank %>%
+  dplyr::filter(!is.na(Count)) %>%    # ignore rows with missing counts
+  tidyr::uncount(weights = Count)
+
+#| label: freq_table
+# Frequency table for Army enlisted (E ranks)
+library(janitor)
+library(dplyr)
+library(kableExtra)
+
+army_enlisted_ind <- forces_individuals %>%
+  filter(
+    Branch == "Army",
+    grepl("^E", PayGrade)
+  )
+
+army_rank_sex_tab <- army_enlisted_ind %>%
+  tabyl(Rank, Sex) %>%
+  adorn_totals("row") %>%
+  adorn_totals("col")
+
+army_rank_sex_tab %>%
+  kable(
+    caption = "Two-way frequency table of Army Enlisted personnel by Sex and Rank"
+  ) %>%
+  kable_styling(full_width = FALSE)
+
+army_rank_sex_tab
+
+```
+### Narrative Interpretation
+
+The two-way frequency table comparing sex and rank among Enlisted soldiers in the U.S. Army shows how representation varies across pay grades. Each row corresponds to a specific enlisted rank (such as Private, Corporal, or Staff Sergeant), and the columns report the number of male and female soldiers in each role, along with row and column totals. Across the table, the overall pattern reveals that male and female counts increase and decrease together across ranks rather than diverging sharply. Ranks with larger numbers of males, such as the junior enlisted levels, also tend to have larger numbers of females relative to other ranks, while senior enlisted positions show smaller and fairly similar counts for both sexes.
+
+This pattern suggests that, within this subgroup, sex and rank appear to be largely independent. There is no single rank that is disproportionately dominated by one sex relative to the overall distribution; instead, the male-to-female ratio is reasonably consistent from the lower enlisted grades up through the senior enlisted grades. While males remain more numerous overall in the Army, the relative distribution of males and females across the enlisted ranks does not show strong evidence of rank-specific concentration by sex, which is consistent with the idea that promotion through the enlisted ranks occurs similarly for male and female soldiers in this data set.
+
+
+# Popularity of Baby Names
+
+To explore baby name popularity in a meaningful way, we chose the first names of our instructional team — Veronica, Alyssa, Abby, and Neil — so the analysis stays directly connected to our course context. We look at the overall popularity of each name across time without separating by sex.
+
+
+```{r}
+#| label: fig-popular-baby-names
+#| fig-cap: "Figure 2. Time series of the popularity of the names Veronica, Alyssa, Abby, and Neil in the United States."
+#| fig-alt: "Line chart showing the number of babies named Veronica, Alyssa, Abby, or Neil in the United States from 1880 to the 2010s, with each name shown as a distinct colored and patterned line."
+
+# Load the packages needed for this section
+library(babynames)   # baby name data
+library(dplyr)       # data wrangling
+library(ggplot2)     # plotting
+
+# Step 1: Choose the names to study --------------------------------------
+
+# Vector of names to focus on
+selected_names <- c("Veronica", "Alyssa", "Abby", "Neil")
+
+# Step 2: Filter and clean the baby names data ---------------------------
+
+# Filter to only the selected names and combine across sex by year
+baby_names_clean <- babynames %>%
+  filter(
+    name %in% selected_names        # keep only the chosen names
+  ) %>%
+  group_by(year, name) %>%
+  summarise(
+    total_births = sum(n),          # total babies with that name in that year
+    .groups      = "drop"
+  )
+
+# Step 3: Create the time series plot ------------------------------------
+
+baby_names_plot <- ggplot(
+  data    = baby_names_clean,
+  mapping = aes(
+    x        = year,
+    y        = total_births,
+    color    = name,                # encode name with color
+    linetype = name                 # also encode name with line type (not color only)
+  )
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.5) +
+  scale_color_brewer(
+    palette = "Dark2",              # color-blind friendly palette
+    name    = "Name"
+  ) +
+  scale_linetype_discrete(
+    name = "Name"
+  ) +
+  labs(
+    title    = "Popularity of Selected Baby Names Over Time",
+    subtitle = "Total number of babies given each name per year, combined across sex",
+    x        = "Year",
+    y        = "Number of babies given the name",
+    caption  = "Source: babynames package (U.S. Social Security Administration data)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom"
+  )
+
+# Print the plot
+baby_names_plot
+```
+### Narrative: Popularity of Names
+
+Figure 2 shows how the popularity of the names Veronica, Alyssa, Abby, and Neil has changed in the United States over time. I chose these names because they match the first names of the instructional team for this course, which makes the visualization personally relevant and easier to connect to the class context. The plot displays the total number of babies given each name per year, and the different line styles and colors make it easy to compare the four trends.
+
+From the visualization, we can see that Alyssa experiences a sharp rise in popularity during the 1990s before declining quickly, while Veronica shows a steady mid-century peak and gradual decrease. Abby grows more moderately, and Neil remains a consistently uncommon name throughout the years. These patterns help us understand how naming trends emerge and fade across generations. The visualization clearly illustrates these changes and supports comparisons across the four names.
+
+
+# The Box Problem
+
+```{r}
+#| label: fig-box-volume
+#| fig-cap: "Figure 3. Volume of an open-top box as a function of the cut-out size for a 36 in by 48 in sheet of paper."
+#| fig-alt: "Smooth curve showing the volume of an open-top box on the vertical axis versus the cut-out side length on the horizontal axis, starting from a 36 inch by 48 inch rectangular sheet. The curve rises from zero, reaches a maximum, and then decreases back toward zero as the cut-out size increases."
+# Load ggplot2 for plotting
+library(ggplot2)
+
+# Step 1: Define the box volume function -----------------------------
+
+# Function to compute the volume of an open-top box
+# made from a 36 in by 48 in rectangular sheet
+getBoxVolume <- function(x, L = 48, W = 36) {
+  # x: side length of the square cut-out (in inches)
+  # L: length of the original sheet (in inches)
+  # W: width of the original sheet (in inches)
+  
+  volume <- x * (L - 2 * x) * (W - 2 * x)
+  return(volume)
+}
+
+# Step 2: Set up the domain for x -----------------------------------
+
+# The cut-out size must be between 0 and half of the shorter side.
+# The shorter side is 36 inches, so x is in [0, 18].
+box_domain <- data.frame(
+  x = c(0, 18)
+)
+
+# Step 3: Plot the volume function using ggplot2 + stat_function ----
+
+box_volume_plot <- ggplot(
+  data    = box_domain,
+  mapping = aes(x = x)
+) +
+  stat_function(
+    fun       = getBoxVolume,          # function to plot
+    args      = list(L = 48, W = 36),  # paper dimensions
+    linewidth = 1
+  ) +
+  scale_x_continuous(
+    limits = c(0, 18)                  # only show valid cut-out sizes
+  ) +
+  labs(
+    title    = "Volume of an Open-Top Box vs Cut-Out Size",
+    subtitle = "Box constructed from a 36 in by 48 in rectangular sheet of paper",
+    x        = "Side length of square cut-out (inches)",
+    y        = "Volume of box (cubic inches)"
+  ) +
+  theme_minimal(base_size = 12)
+
+# Display the plot
+box_volume_plot
+
+```
+#Narrative for the Box Problem
+
+Figure 3 displays the volume of an open-top box as a function of the cut-out size when starting with a 36 inch by 48 inch sheet of paper. The curve rises from zero, reaches a single clear maximum, and then decreases again as the cut-out becomes too large, which visually shows that only moderate cut-out sizes produce useful box volumes. From the peak of the graph, the maximum volume occurs at a cut-out size of approximately 6 inches, which gives a maximum box volume of roughly 5200 cubic inches. This visualization makes it easy to see both where the maximum occurs and how quickly the volume declines when the cut-out is either too small or too large, helping us understand the trade-off between base size and height for the box.
+
+# Self Reflection
+Honestly, I have learned a lot in this course. I started to think about all the R concepts that I learned, starting with simple ones like functions with the box problem, which seemed so familiar. However, then I moved into harder concepts like data cleaning and wrangling with the army and family data using tidyverse, which really showed me how helpful it is to be structured in what I do. I also learned a lot about creating data visualizations with the babynames with ggplot2, and that really made things a lot more complicated to do, but easier to see, and that was really rewarding. The greatest thing I learned from this class is debugging, however, especially with all the problems that I had to overcome with my code; but I learned how to do so, and I believe I benefited quite a lot from it.
+
+# Code Appendix
+
+```{r}
+#| label: code-appendix
+#| echo: TRUE
+#| eval: FALSE
+
+############################################################
+
+# Code Appendix: Armed Forces – Two-way Frequency Table
+
+############################################################
+
+# Load packages
+
+library(googlesheets4) # For loading Armed Forces Data
+library(rvest)         # For scraping Armed Forces Ranks
+library(tidyverse)     # For data wrangling and visualizing
+library(janitor)       # For making two-way table
+library(knitr)         # For creating professional tables
+library(kableExtra)    # For styling professional tables
+
+# Use "public / no login" mode for reading the sheet
+
+gs4_deauth()
+
+sheet_url <- "[https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?usp=sharing](https://docs.google.com/spreadsheets/d/19xQnI1cBh6Jkw7eP8YQuuicMlVDF7Gr-nXCb5qbwb_E/edit?usp=sharing)"
+
+# Grab the header rows (title + actual headers)
+
+forces_hdr_raw <- read_sheet(
+ss        = sheet_url,
+col_names = FALSE,
+n_max     = 3
+)
+
+# Grab the core data block under the headers
+
+forces_raw <- read_sheet(
+ss        = sheet_url,
+col_names = FALSE,
+skip      = 3,
+n_max     = 28,
+na        = "N/A*"
+)
+
+# Construct useful column names and clean the forces table
+
+branches_vec <- rep(
+x    = c("Army", "Navy", "Marine Corps", "Air Force", "Space Force", "Total"),
+each = 3
+)
+
+forces_colnames <- paste(
+c("", branches_vec),
+forces_hdr_raw[3, ],
+sep = "."
+)
+
+names(forces_raw) <- forces_colnames
+
+forces_tidy_base <- forces_raw %>%
+dplyr::rename(PayGrade = `.Pay Grade`) %>%
+dplyr::select(!dplyr::contains("Total")) %>%
+dplyr::filter(
+PayGrade != "Total Enlisted",
+PayGrade != "Total Warrant Officers",
+PayGrade != "Total Officers",
+PayGrade != "Total"
+) %>%
+tidyr::pivot_longer(
+cols      = !PayGrade,
+names_to  = "BranchSex",
+values_to = "Count"
+) %>%
+tidyr::separate_wider_delim(
+cols  = BranchSex,
+delim = ".",
+names = c("Branch", "Sex")
+)
+
+# Pull and reshape the rank lookup table
+
+rank_page <- read_html("https://neilhatfield.github.io/Stat184_PayGradeRanks.html")
+
+
+rank_tables <- rank_page %>%
+html_elements("table") %>%
+html_table()
+
+ranks_raw <- rank_tables[[1]]
+
+ranks_raw[1, 1] <- "MetaType"
+
+rank_header <- ranks_raw[1, ]
+names(ranks_raw) <- rank_header[1, ]
+
+ranks_core <- ranks_raw[-c(1, 26), ]
+
+ranks_tidy <- ranks_core %>%
+dplyr::select(!MetaType) %>%
+tidyr::pivot_longer(
+cols      = !`Pay Grade`,
+names_to  = "Branch",
+values_to = "Rank"
+) %>%
+dplyr::mutate(
+Rank = na_if(Rank, "--")
+)
+
+# Join the forces data with rank titles
+
+forces_with_rank <- dplyr::left_join(
+x = forces_tidy_base,
+y = ranks_tidy,
+by = dplyr::join_by(PayGrade == `Pay Grade`, Branch == Branch)
+)
+
+# Build group-level and individual-level data sets
+
+forces_groups <- forces_with_rank
+
+forces_individuals <- forces_with_rank %>%
+dplyr::filter(!is.na(Count)) %>%
+tidyr::uncount(weights = Count)
+
+# Two-way frequency table for Army enlisted (E ranks)
+
+#| label: fig-armed-forces-freq
+#| fig-cap: "Figure 2. Two-way frequency table of Army enlisted personnel by sex and rank."
+#| fig-alt: "A contingency table showing counts of Army enlisted service members by rank (rows) and sex (columns), including row and column totals."
+
+army_enlisted_ind <- forces_individuals %>%
+filter(
+Branch == "Army",
+grepl("^E", Pay.Grade)
+)
+
+army_rank_sex_tab <- army_enlisted_ind %>%
+tabyl(Rank, Sex) %>%
+adorn_totals("row") %>%
+adorn_totals("col")
+
+army_rank_sex_tab %>%
+kable(caption = "Two-way frequency table of Army Enlisted personnel by Sex and Rank") %>%
+kable_styling(full_width = FALSE)
+
+############################################################
+
+# Code Appendix: Popular Baby Names
+
+############################################################
+
+#| label: fig-popular-baby-names
+#| fig-cap: "Figure 3. Time series of the popularity of the names Veronica, Alyssa, Abby, and Neil in the United States."
+#| fig-alt: "Line chart showing the number of babies named Veronica, Alyssa, Abby, or Neil in the United States from 1880 to the 2010s, with each name shown as a distinct colored and patterned line."
+
+library(babynames)
+library(dplyr)
+library(ggplot2)
+
+selected_names <- c("Veronica", "Alyssa", "Abby", "Neil")
+
+baby_names_clean <- babynames %>%
+filter(
+name %in% selected_names
+) %>%
+group_by(year, name) %>%
+summarise(
+total_births = sum(n),
+.groups      = "drop"
+)
+
+baby_names_plot <- ggplot(
+data    = baby_names_clean,
+mapping = aes(
+x        = year,
+y        = total_births,
+color    = name,
+linetype = name
+)
+) +
+geom_line(linewidth = 0.9) +
+geom_point(size = 1.5) +
+scale_color_brewer(
+palette = "Dark2",
+name    = "Name"
+) +
+scale_linetype_discrete(
+name = "Name"
+) +
+labs(
+title    = "Popularity of Selected Baby Names Over Time",
+subtitle = "Total number of babies given each name per year, combined across sex",
+x        = "Year",
+y        = "Number of babies given the name",
+caption  = "Source: babynames package (U.S. Social Security Administration data)"
+) +
+theme_minimal(base_size = 11) +
+theme(
+legend.position = "bottom"
+)
+
+baby_names_plot
+
+############################################################
+
+# Code Appendix: Box Problem – Volume Function Plot
+
+############################################################
+
+#| label: fig-box-volume
+#| fig-cap: "Figure 4. Volume of an open-top box as a function of the cut-out size for a 36 in by 48 in sheet of paper."
+#| fig-alt: "Smooth curve showing the volume of an open-top box on the vertical axis versus the cut-out side length on the horizontal axis, starting from a 36 inch by 48 inch rectangular sheet. The curve rises from zero, reaches a maximum, and then decreases back toward zero as the cut-out size increases."
+
+library(ggplot2)
+
+getBoxVolume <- function(x, L = 48, W = 36) {
+volume <- x * (L - 2 * x) * (W - 2 * x)
+return(volume)
+}
+
+box_domain <- data.frame(
+x = c(0, 18)
+)
+
+box_volume_plot <- ggplot(
+data    = box_domain,
+mapping = aes(x = x)
+) +
+stat_function(
+fun       = getBoxVolume,
+args      = list(L = 48, W = 36),
+linewidth = 1
+) +
+scale_x_continuous(
+limits = c(0, 18)
+) +
+labs(
+title    = "Volume of an Open-Top Box vs Cut-Out Size",
+subtitle = "Box constructed from a 36 in by 48 in rectangular sheet of paper",
+x        = "Side length of square cut-out (inches)",
+y        = "Volume of box (cubic inches)"
+) +
+theme_minimal(base_size = 12)
+
+box_volume_plot
+
+
+
+```
